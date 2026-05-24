@@ -1,139 +1,244 @@
-// Minecraft Entity tracking.
+// Minecraft entity tracking for 1.21.1.
+// Reference: https://minecraft.wiki/w/Java_Edition_protocol/Packets
+//
+// Tracks entities in the world: position, velocity, metadata.
+// Corresponds to PrismarineJS/prismarine-entity.
 //
 // Usage:
-//   import entity
-//   let e = entity.new(42, "player")
-//   let e = entity.set_pos(e, 100.0, 64.0, 200.0)
+//   import mc_entity
+//   var tracker = mc_entity.new_tracker()
+//   tracker = mc_entity.on_spawn(tracker, id, type_id, x, y, z)
+//   let entity = mc_entity.get(tracker, id)
+
+// --- Types ---
 
 type Vec3 = { x: Float, y: Float, z: Float }
 
 type Entity = {
   id: Int,
-  kind: String,
-  display_name: String,
+  type_id: Int,
   position: Vec3,
   velocity: Vec3,
   yaw: Float,
   pitch: Float,
   on_ground: Bool,
-  health: Float,
-  metadata: List[Value],
 }
 
-fn vec3(x: Float, y: Float, z: Float) -> Vec3 = { x: x, y: y, z: z }
-fn zero_vec() -> Vec3 = { x: 0.0, y: 0.0, z: 0.0 }
-
-fn new(id: Int, kind: String) -> Entity = {
-  id: id, kind: kind, display_name: kind,
-  position: zero_vec(), velocity: zero_vec(),
-  yaw: 0.0, pitch: 0.0, on_ground: true, health: 20.0, metadata: [],
+type EntityTracker = {
+  entities: List[Entity],
 }
 
-fn set_pos(e: Entity, x: Float, y: Float, z: Float) -> Entity =
-  { ...e, position: vec3(x, y, z) }
+// --- Tracker ---
 
-fn set_vel(e: Entity, x: Float, y: Float, z: Float) -> Entity =
-  { ...e, velocity: vec3(x, y, z) }
+fn new_tracker() -> EntityTracker =
+  { entities: [] }
 
-fn set_look(e: Entity, yaw: Float, pitch: Float) -> Entity =
-  { ...e, yaw: yaw, pitch: pitch }
-
-fn set_on_ground(e: Entity, on: Bool) -> Entity =
-  { ...e, on_ground: on }
-
-fn set_health(e: Entity, hp: Float) -> Entity =
-  { ...e, health: hp }
-
-fn distance(a: Entity, b: Entity) -> Float = {
-  let dx = a.position.x - b.position.x
-  let dy = a.position.y - b.position.y
-  let dz = a.position.z - b.position.z
-  math.sqrt(dx * dx + dy * dy + dz * dz)
-}
-
-fn distance_xz(a: Entity, b: Entity) -> Float = {
-  let dx = a.position.x - b.position.x
-  let dz = a.position.z - b.position.z
-  math.sqrt(dx * dx + dz * dz)
-}
-
-// ── Entity tracker (map of id → Entity) ─────────
-
-type Tracker = { entities: Map[Int, Entity] }
-
-fn new_tracker() -> Tracker = { entities: map.new() }
-
-fn track(t: Tracker, e: Entity) -> Tracker =
-  { entities: map.set(t.entities, e.id, e) }
-
-fn untrack(t: Tracker, id: Int) -> Tracker =
-  { entities: map.remove(t.entities, id) }
-
-fn get(t: Tracker, id: Int) -> Option[Entity] =
-  map.get(t.entities, id)
-
-fn update_pos(t: Tracker, id: Int, x: Float, y: Float, z: Float) -> Tracker =
-  match map.get(t.entities, id) {
-    some(e) => track(t, set_pos(e, x, y, z)),
-    none => t,
+fn get(tracker: EntityTracker, entity_id: Int) -> Option[Entity] = {
+  var found: Option[Entity] = none
+  for e in tracker.entities {
+    if e.id == entity_id then { found = some(e) } else { () }
   }
+  found
+}
 
-fn all(t: Tracker) -> List[Entity] = map.values(t.entities)
+fn count(tracker: EntityTracker) -> Int =
+  list.length(tracker.entities)
 
-fn nearest(t: Tracker, pos: Vec3) -> Option[Entity] = {
-  let entities = map.values(t.entities)
-  entities |> list.fold(none, (closest, e) => {
-    let d = math.sqrt((e.position.x - pos.x) * (e.position.x - pos.x) + (e.position.z - pos.z) * (e.position.z - pos.z))
-    match closest {
-      none => some(e),
-      some(c) => {
-        let cd = math.sqrt((c.position.x - pos.x) * (c.position.x - pos.x) + (c.position.z - pos.z) * (c.position.z - pos.z))
-        if d < cd then some(e) else some(c)
-      },
+fn ids(tracker: EntityTracker) -> List[Int] =
+  list.map(tracker.entities, (e) => e.id)
+
+// --- Events ---
+
+fn on_spawn(tracker: EntityTracker, id: Int, type_id: Int, x: Float, y: Float, z: Float) -> EntityTracker = {
+  let entity: Entity = {
+    id: id,
+    type_id: type_id,
+    position: { x: x, y: y, z: z },
+    velocity: { x: 0.0, y: 0.0, z: 0.0 },
+    yaw: 0.0,
+    pitch: 0.0,
+    on_ground: false,
+  }
+  // Remove existing entity with same ID, add new
+  let filtered = list.filter(tracker.entities, (e) => e.id != id)
+  { entities: filtered + [entity] }
+}
+
+fn on_destroy(tracker: EntityTracker, entity_ids: List[Int]) -> EntityTracker = {
+  let filtered = list.filter(tracker.entities, (e) => not list.contains(entity_ids, e.id))
+  { entities: filtered }
+}
+
+fn on_move(tracker: EntityTracker, entity_id: Int, dx: Float, dy: Float, dz: Float) -> EntityTracker = {
+  let updated = list.map(tracker.entities, (e) => {
+    if e.id == entity_id then {
+      { ...e, position: { x: e.position.x + dx, y: e.position.y + dy, z: e.position.z + dz } }
+    } else {
+      e
     }
   })
+  { entities: updated }
 }
 
-// ── Tests ───────────────────────────────────────────
-
-test "new entity" {
-  let e = new(1, "zombie")
-  assert_eq(e.id, 1)
-  assert_eq(e.kind, "zombie")
-  assert_eq(e.position.x, 0.0)
+fn on_teleport(tracker: EntityTracker, entity_id: Int, x: Float, y: Float, z: Float) -> EntityTracker = {
+  let updated = list.map(tracker.entities, (e) => {
+    if e.id == entity_id then { ...e, position: { x: x, y: y, z: z } }
+    else e
+  })
+  { entities: updated }
 }
 
-test "set position" {
-  let e = set_pos(new(1, "player"), 10.0, 64.0, 20.0)
-  assert_eq(e.position.x, 10.0)
-  assert_eq(e.position.y, 64.0)
+fn on_look(tracker: EntityTracker, entity_id: Int, yaw: Float, pitch: Float) -> EntityTracker = {
+  let updated = list.map(tracker.entities, (e) => {
+    if e.id == entity_id then { ...e, yaw: yaw, pitch: pitch }
+    else e
+  })
+  { entities: updated }
 }
 
-test "tracker" {
-  var t = new_tracker()
-  t = track(t, set_pos(new(1, "zombie"), 10.0, 64.0, 10.0))
-  t = track(t, set_pos(new(2, "skeleton"), 20.0, 64.0, 20.0))
-  assert_eq(list.len(all(t)), 2)
+fn on_velocity(tracker: EntityTracker, entity_id: Int, vx: Float, vy: Float, vz: Float) -> EntityTracker = {
+  let updated = list.map(tracker.entities, (e) => {
+    if e.id == entity_id then { ...e, velocity: { x: vx, y: vy, z: vz } }
+    else e
+  })
+  { entities: updated }
+}
+
+// --- Helpers ---
+
+fn distance(a: Vec3, b: Vec3) -> Float = {
+  let dx = a.x - b.x
+  let dy = a.y - b.y
+  let dz = a.z - b.z
+  float.sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+fn nearest(tracker: EntityTracker, pos: Vec3) -> Option[Entity] = {
+  var best: Option[Entity] = none
+  var best_dist = 999999.0
+  for e in tracker.entities {
+    let d = distance(pos, e.position)
+    if d < best_dist then {
+      best = some(e)
+      best_dist = d
+    } else { () }
+  }
+  best
+}
+
+fn by_type(tracker: EntityTracker, type_id: Int) -> List[Entity] =
+  list.filter(tracker.entities, (e) => e.type_id == type_id)
+
+// --- Tests ---
+
+test "new tracker is empty" {
+  let t = new_tracker()
+  assert_eq(count(t), 0)
+}
+
+test "spawn and get" {
+  let t = on_spawn(new_tracker(), 1, 70, 10.0, 64.0, -20.0)
+  assert_eq(count(t), 1)
   match get(t, 1) {
-    some(e) => assert_eq(e.kind, "zombie"),
+    some(e) => {
+      assert_eq(e.type_id, 70)
+      assert_eq(e.position.x, 10.0)
+      assert_eq(e.position.y, 64.0)
+    },
     none => assert(false),
   }
 }
 
-test "untrack" {
-  var t = new_tracker()
-  t = track(t, new(1, "zombie"))
-  t = track(t, new(2, "skeleton"))
-  t = untrack(t, 1)
-  assert_eq(list.len(all(t)), 1)
-}
-
-test "update position" {
-  var t = new_tracker()
-  t = track(t, new(1, "zombie"))
-  t = update_pos(t, 1, 5.0, 10.0, 15.0)
+test "spawn replaces existing" {
+  var t = on_spawn(new_tracker(), 1, 70, 0.0, 0.0, 0.0)
+  t = on_spawn(t, 1, 71, 5.0, 5.0, 5.0)
+  assert_eq(count(t), 1)
   match get(t, 1) {
-    some(e) => assert_eq(e.position.x, 5.0),
+    some(e) => assert_eq(e.type_id, 71),
     none => assert(false),
   }
+}
+
+test "destroy" {
+  var t = on_spawn(new_tracker(), 1, 70, 0.0, 0.0, 0.0)
+  t = on_spawn(t, 2, 71, 0.0, 0.0, 0.0)
+  t = on_destroy(t, [1])
+  assert_eq(count(t), 1)
+  assert_eq(get(t, 1), none)
+  assert_ne(get(t, 2), none)
+}
+
+test "move" {
+  var t = on_spawn(new_tracker(), 1, 70, 10.0, 64.0, 0.0)
+  t = on_move(t, 1, 1.0, 0.0, -1.0)
+  match get(t, 1) {
+    some(e) => {
+      assert_eq(e.position.x, 11.0)
+      assert_eq(e.position.z, -1.0)
+    },
+    none => assert(false),
+  }
+}
+
+test "teleport" {
+  var t = on_spawn(new_tracker(), 1, 70, 0.0, 0.0, 0.0)
+  t = on_teleport(t, 1, 100.0, 200.0, 300.0)
+  match get(t, 1) {
+    some(e) => assert_eq(e.position.x, 100.0),
+    none => assert(false),
+  }
+}
+
+test "look" {
+  var t = on_spawn(new_tracker(), 1, 70, 0.0, 0.0, 0.0)
+  t = on_look(t, 1, 90.0, 45.0)
+  match get(t, 1) {
+    some(e) => {
+      assert_eq(e.yaw, 90.0)
+      assert_eq(e.pitch, 45.0)
+    },
+    none => assert(false),
+  }
+}
+
+test "distance" where [
+  "zero"     [ax = 0.0, ay = 0.0, az = 0.0, bx = 0.0, by = 0.0, bz = 0.0, want = 0.0],
+  "unit x"   [ax = 0.0, ay = 0.0, az = 0.0, bx = 1.0, by = 0.0, bz = 0.0, want = 1.0],
+  "diagonal" [ax = 0.0, ay = 0.0, az = 0.0, bx = 3.0, by = 4.0, bz = 0.0, want = 5.0],
+] {
+  let a: Vec3 = { x: ax, y: ay, z: az }
+  let b: Vec3 = { x: bx, y: by, z: bz }
+  assert_eq(distance(a, b), want)
+}
+
+test "nearest" {
+  var t = on_spawn(new_tracker(), 1, 70, 0.0, 0.0, 0.0)
+  t = on_spawn(t, 2, 71, 100.0, 0.0, 0.0)
+  t = on_spawn(t, 3, 72, 5.0, 0.0, 0.0)
+  let pos: Vec3 = { x: 4.0, y: 0.0, z: 0.0 }
+  match nearest(t, pos) {
+    some(e) => assert_eq(e.id, 3),
+    none => assert(false),
+  }
+}
+
+test "by_type" {
+  var t = on_spawn(new_tracker(), 1, 70, 0.0, 0.0, 0.0)
+  t = on_spawn(t, 2, 71, 0.0, 0.0, 0.0)
+  t = on_spawn(t, 3, 70, 0.0, 0.0, 0.0)
+  assert_eq(list.length(by_type(t, 70)), 2)
+  assert_eq(list.length(by_type(t, 71)), 1)
+  assert_eq(list.length(by_type(t, 99)), 0)
+}
+
+test "ids" {
+  var t = on_spawn(new_tracker(), 5, 70, 0.0, 0.0, 0.0)
+  t = on_spawn(t, 10, 71, 0.0, 0.0, 0.0)
+  let id_list = ids(t)
+  assert(list.contains(id_list, 5))
+  assert(list.contains(id_list, 10))
+}
+
+test "get missing returns none" {
+  assert_eq(get(new_tracker(), 999), none)
 }
