@@ -110,7 +110,7 @@ fn distance(a: Vec3, b: Vec3) -> Float = {
   let dx = a.x - b.x
   let dy = a.y - b.y
   let dz = a.z - b.z
-  float.sqrt(dx * dx + dy * dy + dz * dz)
+  math.sqrt(dx * dx + dy * dy + dz * dz)
 }
 
 fn nearest(tracker: EntityTracker, pos: Vec3) -> Option[Entity] = {
